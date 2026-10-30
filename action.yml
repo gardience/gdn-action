@@ -1,0 +1,61 @@
+name: Gardience gdn
+description: Run gdn against your own Gardience server, so a pipeline can check fleet health or run approved changes.
+author: Gardience
+branding:
+  icon: server
+  color: green
+
+inputs:
+  server:
+    description: Your Gardience console address, for example https://gardience.example.com
+    required: true
+  api-key:
+    description: A Gardience API key. Store it as a secret. A read key can check; an operate key can run.
+    required: true
+  args:
+    description: The gdn command and its arguments, for example nodes Linux, or run web 'systemctl is-active nginx'
+    required: true
+  ca-cert:
+    description: The console's certificate (PEM text) when it is self-signed. Store it as a secret or variable.
+    required: false
+    default: ""
+  insecure:
+    description: Set to true to turn certificate checks off. For a quick test only.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Download gdn from your server
+      shell: bash
+      env:
+        GARDIENCE_URL: ${{ inputs.server }}
+        GDN_CA_PEM: ${{ inputs.ca-cert }}
+        GDN_INSECURE: ${{ inputs.insecure }}
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/gdn"; mkdir -p "$dir"
+        tls=()
+        if [ -n "$GDN_CA_PEM" ]; then
+          printf '%s\n' "$GDN_CA_PEM" > "$dir/ca.pem"
+          tls=(--cacert "$dir/ca.pem")
+          echo "GARDIENCE_CA=$dir/ca.pem" >> "$GITHUB_ENV"
+        fi
+        if [ "$GDN_INSECURE" = "true" ]; then
+          tls=(--insecure)
+          echo "GARDIENCE_INSECURE=1" >> "$GITHUB_ENV"
+        fi
+        curl -fsSL "${tls[@]}" -o "$dir/gdn" "${GARDIENCE_URL%/}/gardience/cli/gdn"
+        chmod +x "$dir/gdn"
+        echo "GDN_BIN=$dir/gdn" >> "$GITHUB_ENV"
+
+    - name: Run gdn
+      shell: bash
+      env:
+        GARDIENCE_URL: ${{ inputs.server }}
+        GARDIENCE_KEY: ${{ inputs.api-key }}
+        GDN_ARGS: ${{ inputs.args }}
+        NO_COLOR: "1"
+      # The arguments are split like a shell would, but never run through a shell.
+      run: python3 -c 'import os, shlex, sys; b = os.environ["GDN_BIN"]; os.execv(sys.executable, [sys.executable, b] + shlex.split(os.environ["GDN_ARGS"]))'
